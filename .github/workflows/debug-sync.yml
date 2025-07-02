@@ -1,0 +1,148 @@
+name: 🔍 Debug Google to Notion Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_offset:
+        description: "시작 오프셋"
+        required: false
+        default: "0"
+      test_limit:
+        description: "처리 개수"
+        required: false
+        default: "0"
+  repository_dispatch:
+    types: [run-sync]
+
+jobs:
+  debug-and-sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🔍 Step 1 - Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔍 Step 2 - SECRET 완전 디버깅
+        run: |
+          echo "🔍🔍🔍 SECRETS 디버깅 시작 🔍🔍🔍"
+          echo "현재 시간: $(date)"
+          echo "워크플로우: debug-sync.yml"
+          echo ""
+
+          echo "=== Google JSON Secret 상태 ==="
+          if [ -z "$GOOGLE_APPLICATION_CREDENTIALS_JSON" ]; then
+            echo "❌❌❌ GOOGLE_APPLICATION_CREDENTIALS_JSON이 완전히 비어있습니다!"
+            echo "GitHub Secrets 설정을 다시 확인하세요."
+            echo "Secret 이름: GOOGLE_APPLICATION_CREDENTIALS_JSON"
+            exit 1
+          fi
+
+          echo "✅ Secret이 존재합니다"
+          echo "길이: ${#GOOGLE_APPLICATION_CREDENTIALS_JSON} 문자"
+          echo "첫 50자: '${GOOGLE_APPLICATION_CREDENTIALS_JSON:0:50}'"
+          echo "마지막 10자: '${GOOGLE_APPLICATION_CREDENTIALS_JSON: -10}'"
+
+          if [ ${#GOOGLE_APPLICATION_CREDENTIALS_JSON} -lt 500 ]; then
+            echo "❌❌❌ JSON이 너무 짧습니다! 실제 Google 서비스 계정 JSON 파일 전체를 붙여넣어야 합니다."
+            echo "전체 내용:"
+            echo "$GOOGLE_APPLICATION_CREDENTIALS_JSON"
+            exit 1
+          fi
+
+          echo "=== 다른 Secrets 상태 ==="
+          echo "SPREADSHEET_ID: ${SPREADSHEET_ID:-'❌ 없음'}"
+          echo "NOTION_TOKEN 길이: ${#NOTION_TOKEN}"
+          echo "AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-'❌ 없음'}"
+
+          echo "🔍🔍🔍 SECRET 디버깅 완료 🔍🔍🔍"
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+
+      - name: 🔍 Step 3 - Python 설정
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: 🔍 Step 4 - 패키지 설치
+        run: |
+          echo "🔍 Python 패키지 설치 중..."
+          pip install -r requirements.txt
+          echo "✅ 패키지 설치 완료"
+
+      - name: 🔍 Step 5 - Chrome 설치
+        run: |
+          echo "🔍 Chrome 설치 중..."
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable xvfb
+          echo "✅ Chrome 설치 완료"
+
+      - name: 🔍 Step 6 - Google 인증 파일 생성
+        run: |
+          echo "🔍🔍🔍 Google 인증 파일 생성 시작 🔍🔍🔍"
+
+          # 이번에는 확실히 파일을 생성합니다
+          cat > /tmp/google_credentials.json << 'EOF'
+          ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+          EOF
+
+          echo "파일 생성 완료"
+          file_size=$(wc -c < /tmp/google_credentials.json)
+          echo "파일 크기: ${file_size} bytes"
+
+          if [ $file_size -lt 100 ]; then
+            echo "❌❌❌ 파일이 너무 작습니다!"
+            echo "파일 전체 내용:"
+            cat /tmp/google_credentials.json
+            exit 1
+          fi
+
+          echo "파일 첫 줄:"
+          head -n 1 /tmp/google_credentials.json
+          echo "파일 마지막 줄:"
+          tail -n 1 /tmp/google_credentials.json
+
+          # JSON 유효성 검사
+          if python -c "import json; json.load(open('/tmp/google_credentials.json'))" 2>/dev/null; then
+            echo "✅✅✅ 유효한 JSON 파일입니다!"
+          else
+            echo "❌❌❌ 유효하지 않은 JSON입니다!"
+            echo "JSON 검증 오류:"
+            python -c "import json; json.load(open('/tmp/google_credentials.json'))" 2>&1 || true
+            exit 1
+          fi
+
+          echo "🔍🔍🔍 Google 인증 파일 준비 완료 🔍🔍🔍"
+
+      - name: 🚀 Step 7 - 스크립트 실행
+        env:
+          CHROME_BINARY: /usr/bin/google-chrome
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/google_credentials.json
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          SHEET_RANGE: ${{ secrets.SHEET_RANGE }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          SMORE_USER_DATA: ${{ secrets.SMORE_USER_DATA }}
+          SMORE_PROFILE: ${{ secrets.SMORE_PROFILE }}
+          TEST_OFFSET: ${{ github.event.inputs.test_offset || github.event.client_payload.test_offset || '0' }}
+          TEST_LIMIT: ${{ github.event.inputs.test_limit || github.event.client_payload.test_limit || '0' }}
+        run: |
+          echo "🚀🚀🚀 스크립트 실행 시작 🚀🚀🚀"
+          echo "TEST_OFFSET: $TEST_OFFSET"
+          echo "TEST_LIMIT: $TEST_LIMIT"
+          echo "Google 인증 파일: $GOOGLE_APPLICATION_CREDENTIALS"
+
+          # 가상 디스플레이 설정
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+
+          echo "🔍 Python 스크립트 실행..."
+          python google-to-notion.py
+
+          echo "✅✅✅ 스크립트 실행 완료 ✅✅✅"
