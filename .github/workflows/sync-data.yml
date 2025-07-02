@@ -1,0 +1,62 @@
+name: Google to Notion Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_offset:
+        description: "시작 오프셋"
+        required: false
+        default: "0"
+      test_limit:
+        description: "처리 개수"
+        required: false
+        default: "0"
+
+  repository_dispatch:
+    types: [run-sync]
+
+jobs:
+  sync-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Install Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: Run sync script
+        env:
+          CHROME_BINARY: /usr/bin/google-chrome
+          SMORE_USER_DATA: ${{ secrets.SMORE_USER_DATA }}
+          SMORE_PROFILE: ${{ secrets.SMORE_PROFILE }}
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          SHEET_RANGE: ${{ secrets.SHEET_RANGE }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TEST_OFFSET: ${{ github.event.inputs.test_offset || github.event.client_payload.test_offset || '0' }}
+          TEST_LIMIT: ${{ github.event.inputs.test_limit || github.event.client_payload.test_limit || '0' }}
+        run: |
+          echo '${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}' > /tmp/google_credentials.json
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/google_credentials.json
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+          cd src
+          python google_to_notion.py
