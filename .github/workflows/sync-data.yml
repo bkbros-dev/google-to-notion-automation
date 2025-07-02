@@ -58,5 +58,4 @@ jobs:
           export GOOGLE_APPLICATION_CREDENTIALS=/tmp/google_credentials.json
           export DISPLAY=:99
           Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
-          cd src
-          python google_to_notion.py
+          python google-to-notion.py
