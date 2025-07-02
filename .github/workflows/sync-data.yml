@@ -28,6 +28,25 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Debug Secrets (중요!)
+        run: |
+          echo "=== Secret 디버깅 ==="
+          echo "Google JSON 길이: ${#GOOGLE_APPLICATION_CREDENTIALS_JSON}"
+          echo "첫 50자: ${GOOGLE_APPLICATION_CREDENTIALS_JSON:0:50}"
+          if [ -z "$GOOGLE_APPLICATION_CREDENTIALS_JSON" ]; then
+            echo "❌ GOOGLE_APPLICATION_CREDENTIALS_JSON이 비어있습니다!"
+            exit 1
+          else
+            echo "✅ GOOGLE_APPLICATION_CREDENTIALS_JSON이 설정되었습니다"
+          fi
+          echo "=== 기타 환경변수 확인 ==="
+          echo "SPREADSHEET_ID: ${SPREADSHEET_ID}"
+          echo "NOTION_TOKEN 길이: ${#NOTION_TOKEN}"
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
@@ -37,12 +56,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
 
+      - name: Create Google credentials file
+        run: |
+          echo "Google credentials 파일 생성 중..."
+          echo '${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}' > /tmp/google_credentials.json
+          echo "파일 크기: $(wc -c < /tmp/google_credentials.json) bytes"
+          echo "파일 첫 줄: $(head -n 1 /tmp/google_credentials.json)"
+          if [ $(wc -c < /tmp/google_credentials.json) -lt 10 ]; then
+            echo "❌ JSON 파일이 너무 작습니다!"
+            exit 1
+          fi
+
       - name: Run sync script
         env:
           CHROME_BINARY: /usr/bin/google-chrome
           SMORE_USER_DATA: ${{ secrets.SMORE_USER_DATA }}
           SMORE_PROFILE: ${{ secrets.SMORE_PROFILE }}
-          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/google_credentials.json
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           SHEET_RANGE: ${{ secrets.SHEET_RANGE }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
@@ -54,8 +84,6 @@ jobs:
           TEST_OFFSET: ${{ github.event.inputs.test_offset || github.event.client_payload.test_offset || '0' }}
           TEST_LIMIT: ${{ github.event.inputs.test_limit || github.event.client_payload.test_limit || '0' }}
         run: |
-          echo '${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}' > /tmp/google_credentials.json
-          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/google_credentials.json
           export DISPLAY=:99
           Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
           python google-to-notion.py
