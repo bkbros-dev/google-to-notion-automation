@@ -346,6 +346,7 @@
 
 # if __name__ == "__main__":
 #     sheet_to_notion_s3()
+
 import os
 import re
 import tempfile
@@ -386,8 +387,8 @@ NOTION_DB_ID = get_env_or_fail("NOTION_DATABASE_ID")
 TEST_OFFSET = int(os.getenv("TEST_OFFSET", "0"))
 TEST_LIMIT = int(os.getenv("TEST_LIMIT", "0"))
 
-# Smore 쿠키 직접 설정 (수동으로 획득한 쿠키)
-SMORE_COOKIES = os.getenv("SMORE_COOKIES", "{}")  # JSON 형태로 저장
+# Smore 쿠키 (JSON 형태)
+SMORE_COOKIES = os.getenv("SMORE_COOKIES", "{}")
 
 # 다운로드 디렉토리
 DOWNLOAD_DIR = os.getenv("DOWNLOAD_DIR", tempfile.gettempdir())
@@ -432,8 +433,6 @@ try:
     print("✅ S3 연결 성공")
 except Exception as e:
     print(f"❌ S3 연결 실패: {e}")
-    print("  - AWS 자격증명 확인 필요")
-    print("  - IAM 권한 확인 필요")
 
 SHEET_NAME = SHEET_RANGE.split("!")[0]
 
@@ -475,7 +474,7 @@ def safe_key_name(row_idx: int, filename: str) -> str:
     return f"row{row_idx}_{b64}{ext}"
 
 
-# ─── S3 업로드 함수 (개선) ──────────────────────────────────────────────
+# ─── S3 업로드 함수 ──────────────────────────────────────────────────
 def upload_to_s3(local_path, key):
     """이미지 압축 및 S3 업로드"""
     print(f"📤 S3 업로드 시작: {key}")
@@ -488,21 +487,17 @@ def upload_to_s3(local_path, key):
     # 이미지 압축
     try:
         with Image.open(local_path) as img:
-            # EXIF 정보 제거하고 RGB로 변환
             if img.mode in ("RGBA", "LA", "P"):
                 img = img.convert("RGB")
 
-            # 리사이즈
             resample = getattr(Image, "Resampling", Image).LANCZOS
             img.thumbnail((1024, 1024), resample)
 
-            # JPEG로 저장
             jpeg_path = os.path.splitext(local_path)[0] + ".jpg"
             img.save(jpeg_path, format="JPEG", optimize=True, quality=75)
             compressed_path = jpeg_path
             key = os.path.splitext(key)[0] + ".jpg"
 
-            # 원본 파일 삭제 (다른 파일인 경우)
             if jpeg_path != local_path:
                 try:
                     os.remove(local_path)
@@ -517,16 +512,13 @@ def upload_to_s3(local_path, key):
 
     # S3 업로드
     try:
-        # 파일 크기 확인
         file_size = os.path.getsize(compressed_path)
         print(f"📏 파일 크기: {file_size:,} bytes")
 
-        # Content-Type 설정
         import mimetypes
 
         content_type, _ = mimetypes.guess_type(compressed_path)
 
-        # S3 업로드 시도
         with open(compressed_path, "rb") as f:
             s3.upload_fileobj(
                 f,
@@ -535,14 +527,13 @@ def upload_to_s3(local_path, key):
                 ExtraArgs={
                     "ACL": "public-read",
                     "ContentType": content_type or "image/jpeg",
-                    "CacheControl": "max-age=31536000",  # 1년 캐시
+                    "CacheControl": "max-age=31536000",
                 },
             )
 
         s3_url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
         print(f"✅ S3 업로드 완료: {s3_url}")
 
-        # 로컬 파일 정리
         try:
             os.remove(compressed_path)
         except:
@@ -552,15 +543,12 @@ def upload_to_s3(local_path, key):
 
     except Exception as e:
         print(f"❌ S3 업로드 실패: {e}")
-        print("  - AWS 자격증명 확인")
-        print("  - S3 버킷 권한 확인")
-        print("  - 인터넷 연결 확인")
         raise
 
 
-# ─── Smore 쿠키 관리 (수동 방식) ──────────────────────────────────────────
+# ─── Smore 쿠키 관리 ──────────────────────────────────────────────────
 def get_smore_cookies():
-    """환경변수에서 쿠키 로드 또는 빈 딕셔너리 반환"""
+    """환경변수에서 쿠키 로드"""
     try:
         if SMORE_COOKIES and SMORE_COOKIES != "{}":
             cookies = json.loads(SMORE_COOKIES)
@@ -574,10 +562,7 @@ def get_smore_cookies():
         return {}
 
 
-# ─── Smore 파일 다운로드 (Selenium 없이) ───────────────────────────────────
-# 기존 코드의 download_smore_image_direct 함수를 이것으로 교체하세요
-
-
+# ─── Smore 파일 다운로드 (BeautifulSoup 완전 제거) ─────────────────────────────
 def download_smore_image_direct(page_url, cookies, row_idx):
     """BeautifulSoup 없이 Smore API에서 직접 파일 다운로드"""
     print(f"⬇️ Smore API 다운로드 시작: Row {row_idx}")
@@ -592,41 +577,94 @@ def download_smore_image_direct(page_url, cookies, row_idx):
         # 헤더 설정
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "*/*",
+            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
             "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Sec-Fetch-Dest": "image",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Site": "same-origin",
             "Referer": "https://smore.im/",
         }
 
-        # Smore API는 직접 파일을 반환할 가능성이 높음
-        print(f"🔗 API 호출: {page_url}")
+        print(f"🔗 API 직접 호출: {page_url}")
+
+        # 먼저 HEAD 요청으로 확인
+        try:
+            head_response = session.head(page_url, headers=headers, timeout=10)
+            print(f"📊 HEAD 응답: {head_response.status_code}")
+            print(
+                f"📋 Content-Type: {head_response.headers.get('Content-Type', 'Unknown')}"
+            )
+            print(
+                f"📏 Content-Length: {head_response.headers.get('Content-Length', 'Unknown')}"
+            )
+        except:
+            print("⚠️ HEAD 요청 실패, GET으로 진행")
+
+        # 실제 파일 다운로드
         response = session.get(page_url, headers=headers, stream=True, timeout=60)
-        response.raise_for_status()
+        print(f"📊 GET 응답: {response.status_code}")
+
+        if response.status_code != 200:
+            print(f"❌ HTTP 오류: {response.status_code}")
+            return create_error_image(row_idx, f"HTTP {response.status_code}")
 
         # Content-Type 확인
         content_type = response.headers.get("Content-Type", "").lower()
-        print(f"📋 Content-Type: {content_type}")
+        print(f"📋 실제 Content-Type: {content_type}")
 
-        # HTML 응답이면 인증 실패
+        # HTML 응답이면 인증 실패 또는 오류
         if "text/html" in content_type:
-            print("❌ HTML 응답 - 인증 실패 또는 API 변경")
-            # HTML 내용 일부 확인
-            content_preview = (
-                response.text[:200] if hasattr(response, "text") else "No preview"
-            )
-            print(f"📄 응답 내용: {content_preview}")
-            return create_dummy_image(row_idx)
+            print("❌ HTML 응답 감지 - 인증 실패 또는 접근 거부")
+            # 응답 내용 일부 확인
+            try:
+                content_preview = response.text[:300]
+                print(f"📄 HTML 미리보기: {content_preview}")
+
+                # 특정 오류 메시지 확인
+                if any(
+                    keyword in content_preview.lower()
+                    for keyword in [
+                        "login",
+                        "unauthorized",
+                        "forbidden",
+                        "access denied",
+                    ]
+                ):
+                    return create_error_image(row_idx, "인증 필요")
+                else:
+                    return create_error_image(row_idx, "HTML 응답")
+            except:
+                return create_error_image(row_idx, "인증 오류")
+
+        # JSON 응답이면 API 오류
+        if "application/json" in content_type:
+            try:
+                error_data = response.json()
+                print(f"📄 JSON 오류: {error_data}")
+                error_msg = error_data.get("message", "API 오류")
+                return create_error_image(row_idx, error_msg)
+            except:
+                return create_error_image(row_idx, "JSON 파싱 오류")
 
         # 파일명 추출
         filename = f"smore_file_{row_idx}.jpg"
         content_disposition = response.headers.get("content-disposition", "")
         if content_disposition:
-            filename_match = re.search(
-                r'filename\*?=[\'"]?([^\'";]+)', content_disposition
-            )
-            if filename_match:
-                filename = unquote(filename_match.group(1))
-
-        print(f"📝 파일명: {filename}")
+            # Content-Disposition 파싱
+            patterns = [
+                r"filename\*=UTF-8\'\'([^;]+)",
+                r'filename="([^"]+)"',
+                r"filename=([^;,]+)",
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, content_disposition, re.IGNORECASE)
+                if match:
+                    filename = unquote(match.group(1).strip('"'))
+                    print(f"📝 추출된 파일명: {filename}")
+                    break
 
         # 안전한 파일명 생성
         safe_filename = safe_key_name(row_idx, filename)
@@ -634,92 +672,131 @@ def download_smore_image_direct(page_url, cookies, row_idx):
 
         # 파일 저장
         total_size = 0
+        print("💾 파일 저장 중...")
         with open(local_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
                     total_size += len(chunk)
 
-        print(f"✅ 실제 파일 다운로드 완료: {local_path}")
-        print(f"📏 파일 크기: {total_size:,} bytes")
+        print(f"✅ 실제 파일 다운로드 완료!")
+        print(f"📁 경로: {local_path}")
+        print(f"📏 크기: {total_size:,} bytes")
 
         # 파일 크기 검증
-        if total_size < 500:  # 500 bytes 미만이면 오류 파일일 가능성
-            print("⚠️ 파일 크기가 작습니다. 내용 확인...")
+        if total_size < 1000:  # 1KB 미만이면 의심
+            print("⚠️ 파일 크기가 매우 작습니다. 내용 확인...")
             try:
                 with open(local_path, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read(100)
+                    content = f.read(200)
+                    print(f"📄 파일 내용: {content}")
                     if any(
                         word in content.lower()
-                        for word in ["error", "login", "unauthorized"]
+                        for word in ["error", "login", "unauthorized", "forbidden"]
                     ):
-                        print("❌ 오류 응답 감지")
-                        return create_dummy_image(row_idx)
+                        print("❌ 오류 응답 파일 감지")
+                        return create_error_image(row_idx, "인증 오류")
             except:
-                pass  # 바이너리 파일이면 정상
+                # 바이너리 파일이면 정상일 가능성
+                print("🔍 바이너리 파일로 추정, 정상 처리")
+
+        # 이미지 파일인지 확인
+        try:
+            with Image.open(local_path) as img:
+                print(f"🖼️ 이미지 확인: {img.format} {img.size} {img.mode}")
+        except Exception as e:
+            print(f"⚠️ 이미지 검증 실패: {e}")
+            # 이미지가 아니어도 일단 진행
 
         return local_path
 
+    except requests.exceptions.Timeout:
+        print("❌ 타임아웃 오류")
+        return create_error_image(row_idx, "타임아웃")
+    except requests.exceptions.ConnectionError:
+        print("❌ 연결 오류")
+        return create_error_image(row_idx, "연결 실패")
     except requests.exceptions.RequestException as e:
         print(f"❌ 네트워크 오류: {e}")
-        return create_dummy_image(row_idx)
+        return create_error_image(row_idx, f"네트워크: {e}")
     except Exception as e:
         print(f"❌ 예상치 못한 오류: {e}")
-        return create_dummy_image(row_idx)
+        import traceback
+
+        traceback.print_exc()
+        return create_error_image(row_idx, f"오류: {e}")
 
 
-def create_dummy_image(row_idx):
-    """더미 이미지 생성 (개선된 버전)"""
+def create_error_image(row_idx, error_msg):
+    """오류 이미지 생성"""
     try:
         from PIL import Image, ImageDraw, ImageFont
 
-        # 더 큰 이미지 생성
+        # 이미지 생성
         img = Image.new("RGB", (800, 600), color="#f8f9fa")
         draw = ImageDraw.Draw(img)
 
         # 폰트 설정
         try:
             font_title = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28
             )
             font_text = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18
             )
         except:
-            font_title = ImageFont.load_default()
-            font_text = ImageFont.load_default()
+            try:
+                font_title = ImageFont.truetype("arial.ttf", 28)
+                font_text = ImageFont.truetype("arial.ttf", 18)
+            except:
+                font_title = ImageFont.load_default()
+                font_text = ImageFont.load_default()
 
         # 텍스트 작성
-        title = f"파일 다운로드 실패"
+        title = "Smore 파일 다운로드 실패"
         subtitle = f"Row {row_idx}"
-        message1 = "Smore API 인증이 필요합니다"
-        message2 = "쿠키를 설정하거나 수동 다운로드하세요"
+        error_text = f"오류: {error_msg}"
+        solution1 = "해결 방법:"
+        solution2 = "1. Smore 로그인 후 쿠키 설정"
+        solution3 = "2. 수동으로 파일 다운로드"
+        solution4 = "3. API 접근 권한 확인"
 
         # 텍스트 그리기
-        draw.text((50, 150), title, fill="#dc3545", font=font_title)
-        draw.text((50, 200), subtitle, fill="#6c757d", font=font_text)
-        draw.text((50, 280), message1, fill="#495057", font=font_text)
-        draw.text((50, 320), message2, fill="#6c757d", font=font_text)
+        y_pos = 100
+        draw.text((50, y_pos), title, fill="#dc3545", font=font_title)
+        y_pos += 50
+        draw.text((50, y_pos), subtitle, fill="#6c757d", font=font_text)
+        y_pos += 40
+        draw.text((50, y_pos), error_text, fill="#495057", font=font_text)
+        y_pos += 60
+        draw.text((50, y_pos), solution1, fill="#28a745", font=font_text)
+        y_pos += 30
+        draw.text((70, y_pos), solution2, fill="#6c757d", font=font_text)
+        y_pos += 25
+        draw.text((70, y_pos), solution3, fill="#6c757d", font=font_text)
+        y_pos += 25
+        draw.text((70, y_pos), solution4, fill="#6c757d", font=font_text)
 
         # 테두리
         draw.rectangle([20, 20, 780, 580], outline="#dee2e6", width=3)
 
         # 저장
-        dummy_path = os.path.join(DOWNLOAD_DIR, f"download_failed_row_{row_idx}.jpg")
-        img.save(dummy_path, format="JPEG", quality=90)
+        error_path = os.path.join(DOWNLOAD_DIR, f"smore_error_row_{row_idx}.jpg")
+        img.save(error_path, format="JPEG", quality=90)
 
-        print(f"🖼️ 더미 이미지 생성: {dummy_path}")
-        return dummy_path
+        print(f"🖼️ 오류 이미지 생성: {error_path}")
+        return error_path
 
     except Exception as e:
-        print(f"❌ 더미 이미지 생성 실패: {e}")
+        print(f"❌ 오류 이미지 생성 실패: {e}")
         # 텍스트 파일로 대체
-        dummy_path = os.path.join(DOWNLOAD_DIR, f"failed_row_{row_idx}.txt")
-        with open(dummy_path, "w") as f:
-            f.write(
-                f"Download failed for row {row_idx}\nSmore API authentication required"
-            )
-        return dummy_path
+        error_path = os.path.join(DOWNLOAD_DIR, f"smore_error_{row_idx}.txt")
+        with open(error_path, "w", encoding="utf-8") as f:
+            f.write(f"Smore download failed for row {row_idx}\n")
+            f.write(f"Error: {error_msg}\n")
+            f.write(f"Timestamp: {datetime.now()}\n")
+            f.write(f"URL pattern: https://smore.im/api/form/download?fileId=...\n")
+        return error_path
 
 
 # ─── 메인 처리 함수들 ────────────────────────────────────────────────────
@@ -758,7 +835,6 @@ def process_row_data(data, db_props, cookies, row_idx):
         elif ptype == "rich_text":
             props[prop] = {"rich_text": [{"text": {"content": str(val)}}]}
         elif ptype == "select":
-            # select 타입 처리 추가
             props[prop] = {"select": {"name": str(val).strip()}}
 
     return props, image_urls
@@ -939,6 +1015,9 @@ def sheet_to_notion_s3():
 
             except Exception as e:
                 print(f"❌ [Row {i}] 처리 실패: {e}")
+                import traceback
+
+                traceback.print_exc()
                 error_count += 1
                 continue
 
@@ -951,10 +1030,13 @@ def sheet_to_notion_s3():
             print("\n💡 오류 해결 방법:")
             print("  1. SMORE_COOKIES 환경변수 설정")
             print("  2. AWS 자격증명 확인")
-            print("  3. 네트워크 연결 확인")
+            print("  3. Smore API 접근 권한 확인")
 
     except Exception as e:
         print(f"❌ 전체 처리 실패: {e}")
+        import traceback
+
+        traceback.print_exc()
         raise
 
 
@@ -964,7 +1046,10 @@ if __name__ == "__main__":
 # ================================================================
 # 쿠키 수동 설정 방법:
 # 1. 브라우저에서 smore.im 로그인
-# 2. 개발자 도구 > Application > Cookies에서 쿠키 복사
-# 3. 환경변수 설정: SMORE_COOKIES='{"cookie_name":"cookie_value",...}'
+# 2. F12 > Application > Cookies에서 모든 쿠키 복사
+# 3. JSON 형태로 변환하여 환경변수 설정:
+#    SMORE_COOKIES='{"PHPSESSID":"실제값","session_id":"실제값"}'
+#
+# 또는 개별 테스트:
+# curl -I "https://smore.im/api/form/download?fileId=3SJ9V2BprZQL5uuiAaGim9Sc124mEg"
 # ================================================================
-# $Env:TEST_OFFSET = "1"; $Env:TEST_LIMIT = "10"; python google-to-notion.py
