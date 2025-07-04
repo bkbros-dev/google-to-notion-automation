@@ -575,102 +575,50 @@ def get_smore_cookies():
 
 
 # ─── Smore 파일 다운로드 (Selenium 없이) ───────────────────────────────────
+# 기존 코드의 download_smore_image_direct 함수를 이것으로 교체하세요
+
+
 def download_smore_image_direct(page_url, cookies, row_idx):
-    """Selenium 없이 직접 HTTP 요청으로 파일 다운로드"""
-    print(f"⬇️ 직접 다운로드 시작: Row {row_idx}")
+    """BeautifulSoup 없이 Smore API에서 직접 파일 다운로드"""
+    print(f"⬇️ Smore API 다운로드 시작: Row {row_idx}")
 
     try:
-        # 세션 생성
         session = requests.Session()
 
         # 쿠키 설정
         if cookies:
             session.cookies.update(cookies)
 
-        # 헤더 설정 (봇 탐지 우회)
+        # 헤더 설정
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "ko-KR,ko;q=0.8,en-US;q=0.5,en;q=0.3",
-            "Accept-Encoding": "gzip, deflate, br",
-            "DNT": "1",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
+            "Accept": "*/*",
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://smore.im/",
         }
 
-        # 페이지 먼저 방문 (쿠키/세션 확인)
-        print(f"📄 페이지 방문: {page_url}")
-        page_response = session.get(page_url, headers=headers, timeout=30)
-        page_response.raise_for_status()
+        # Smore API는 직접 파일을 반환할 가능성이 높음
+        print(f"🔗 API 호출: {page_url}")
+        response = session.get(page_url, headers=headers, stream=True, timeout=60)
+        response.raise_for_status()
 
-        # 다운로드 링크 찾기 (정규식으로)
-        page_content = page_response.text
+        # Content-Type 확인
+        content_type = response.headers.get("Content-Type", "").lower()
+        print(f"📋 Content-Type: {content_type}")
 
-        # Smore 다운로드 링크 패턴 찾기
-        download_patterns = [
-            r'href="([^"]*download[^"]*)"',
-            r'data-download-url="([^"]*)"',
-            r'"download_url":"([^"]*)"',
-            r'href="([^"]*\/d\/[^"]*)"',  # Smore direct link
-        ]
-
-        download_url = None
-        for pattern in download_patterns:
-            match = re.search(pattern, page_content, re.IGNORECASE)
-            if match:
-                download_url = match.group(1)
-                break
-
-        if not download_url:
-            # 페이지 내용에서 다운로드 버튼 찾기
-            print("🔍 다운로드 링크 검색 중...")
-            # HTML 파싱으로 다운로드 링크 찾기
-            from bs4 import BeautifulSoup
-
-            soup = BeautifulSoup(page_content, "html.parser")
-
-            # 다운로드 버튼 찾기
-            download_elements = soup.find_all(
-                ["a", "button"],
-                {
-                    "id": ["download", "download-btn"],
-                    "class": lambda x: x and ("download" in " ".join(x).lower()),
-                    "href": lambda x: x and ("download" in x or "/d/" in x),
-                },
-            )
-
-            if download_elements:
-                download_url = download_elements[0].get("href") or download_elements[
-                    0
-                ].get("data-url")
-
-        if not download_url:
-            raise ValueError("다운로드 링크를 찾을 수 없습니다.")
-
-        # 상대 URL을 절대 URL로 변환
-        if download_url.startswith("/"):
-            base_url = f"{urlparse(page_url).scheme}://{urlparse(page_url).netloc}"
-            download_url = base_url + download_url
-        elif not download_url.startswith("http"):
-            download_url = page_url.rsplit("/", 1)[0] + "/" + download_url
-
-        print(f"🔗 다운로드 URL: {download_url}")
-
-        # 파일 다운로드
-        print("⬇️ 파일 다운로드 중...")
-        file_response = session.get(
-            download_url, headers=headers, stream=True, timeout=60
-        )
-        file_response.raise_for_status()
-
-        # HTML 응답인지 확인 (로그인 페이지 등)
-        content_type = file_response.headers.get("Content-Type", "").lower()
+        # HTML 응답이면 인증 실패
         if "text/html" in content_type:
-            raise ValueError("HTML 응답 받음 - 인증 실패 가능성")
+            print("❌ HTML 응답 - 인증 실패 또는 API 변경")
+            # HTML 내용 일부 확인
+            content_preview = (
+                response.text[:200] if hasattr(response, "text") else "No preview"
+            )
+            print(f"📄 응답 내용: {content_preview}")
+            return create_dummy_image(row_idx)
 
         # 파일명 추출
-        filename = f"file_{row_idx}.jpg"
-        content_disposition = file_response.headers.get("content-disposition", "")
+        filename = f"smore_file_{row_idx}.jpg"
+        content_disposition = response.headers.get("content-disposition", "")
         if content_disposition:
             filename_match = re.search(
                 r'filename\*?=[\'"]?([^\'";]+)', content_disposition
@@ -678,50 +626,100 @@ def download_smore_image_direct(page_url, cookies, row_idx):
             if filename_match:
                 filename = unquote(filename_match.group(1))
 
+        print(f"📝 파일명: {filename}")
+
         # 안전한 파일명 생성
         safe_filename = safe_key_name(row_idx, filename)
         local_path = os.path.join(DOWNLOAD_DIR, safe_filename)
 
         # 파일 저장
+        total_size = 0
         with open(local_path, "wb") as f:
-            for chunk in file_response.iter_content(chunk_size=8192):
+            for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
+                    total_size += len(chunk)
 
-        file_size = os.path.getsize(local_path)
-        print(f"✅ 다운로드 완료: {local_path} ({file_size:,} bytes)")
+        print(f"✅ 실제 파일 다운로드 완료: {local_path}")
+        print(f"📏 파일 크기: {total_size:,} bytes")
+
+        # 파일 크기 검증
+        if total_size < 500:  # 500 bytes 미만이면 오류 파일일 가능성
+            print("⚠️ 파일 크기가 작습니다. 내용 확인...")
+            try:
+                with open(local_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read(100)
+                    if any(
+                        word in content.lower()
+                        for word in ["error", "login", "unauthorized"]
+                    ):
+                        print("❌ 오류 응답 감지")
+                        return create_dummy_image(row_idx)
+            except:
+                pass  # 바이너리 파일이면 정상
 
         return local_path
 
+    except requests.exceptions.RequestException as e:
+        print(f"❌ 네트워크 오류: {e}")
+        return create_dummy_image(row_idx)
     except Exception as e:
-        print(f"❌ 다운로드 실패: {e}")
-        # 임시 방편: 더미 이미지 생성
+        print(f"❌ 예상치 못한 오류: {e}")
         return create_dummy_image(row_idx)
 
 
 def create_dummy_image(row_idx):
-    """다운로드 실패 시 더미 이미지 생성"""
+    """더미 이미지 생성 (개선된 버전)"""
     try:
         from PIL import Image, ImageDraw, ImageFont
 
-        # 더미 이미지 생성
-        img = Image.new("RGB", (400, 300), color="lightgray")
+        # 더 큰 이미지 생성
+        img = Image.new("RGB", (800, 600), color="#f8f9fa")
         draw = ImageDraw.Draw(img)
 
-        # 텍스트 추가
-        text = f"Image Download Failed\nRow {row_idx}"
-        draw.text((50, 120), text, fill="black")
+        # 폰트 설정
+        try:
+            font_title = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32
+            )
+            font_text = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20
+            )
+        except:
+            font_title = ImageFont.load_default()
+            font_text = ImageFont.load_default()
 
-        # 파일 저장
-        dummy_path = os.path.join(DOWNLOAD_DIR, f"dummy_row_{row_idx}.jpg")
-        img.save(dummy_path, format="JPEG")
+        # 텍스트 작성
+        title = f"파일 다운로드 실패"
+        subtitle = f"Row {row_idx}"
+        message1 = "Smore API 인증이 필요합니다"
+        message2 = "쿠키를 설정하거나 수동 다운로드하세요"
+
+        # 텍스트 그리기
+        draw.text((50, 150), title, fill="#dc3545", font=font_title)
+        draw.text((50, 200), subtitle, fill="#6c757d", font=font_text)
+        draw.text((50, 280), message1, fill="#495057", font=font_text)
+        draw.text((50, 320), message2, fill="#6c757d", font=font_text)
+
+        # 테두리
+        draw.rectangle([20, 20, 780, 580], outline="#dee2e6", width=3)
+
+        # 저장
+        dummy_path = os.path.join(DOWNLOAD_DIR, f"download_failed_row_{row_idx}.jpg")
+        img.save(dummy_path, format="JPEG", quality=90)
 
         print(f"🖼️ 더미 이미지 생성: {dummy_path}")
         return dummy_path
 
     except Exception as e:
         print(f"❌ 더미 이미지 생성 실패: {e}")
-        raise
+        # 텍스트 파일로 대체
+        dummy_path = os.path.join(DOWNLOAD_DIR, f"failed_row_{row_idx}.txt")
+        with open(dummy_path, "w") as f:
+            f.write(
+                f"Download failed for row {row_idx}\nSmore API authentication required"
+            )
+        return dummy_path
 
 
 # ─── 메인 처리 함수들 ────────────────────────────────────────────────────
