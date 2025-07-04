@@ -1,8 +1,359 @@
+# import os
+# import re
+# import tempfile
+# import base64
+# import requests
+# from datetime import datetime, timedelta
+# import boto3
+# import chromedriver_autoinstaller
+# from selenium.webdriver.chrome.service import Service
+# from urllib.parse import urlparse, unquote
+# from PIL import Image
+# from selenium import webdriver
+# from selenium.webdriver.chrome.options import Options
+# from selenium.webdriver.common.by import By
+# from selenium.webdriver.support.ui import WebDriverWait
+# from selenium.webdriver.support import expected_conditions as EC
+
+# from google.oauth2 import service_account
+# from googleapiclient.discovery import build
+# from notion_client import Client as NotionClient
+
+# # ─── 환경변수 로드 (GitHub Actions용) ─────────────────────────────────────
+# CHROME_BINARY = os.getenv("CHROME_BINARY", "/usr/bin/google-chrome")
+# SMORE_USER_DATA = os.getenv("SMORE_USER_DATA")
+# SMORE_PROFILE = os.getenv("SMORE_PROFILE")
+
+# # Google 인증 파일 처리
+# GOOGLE_CRED = os.getenv(
+#     "GOOGLE_APPLICATION_CREDENTIALS", "/tmp/google_credentials.json"
+# )
+
+# SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
+# SHEET_RANGE = os.getenv("SHEET_RANGE")
+# AWS_REGION = os.getenv("AWS_DEFAULT_REGION")
+# S3_BUCKET = os.getenv("S3_BUCKET_NAME")
+# NOTION_TOKEN = os.getenv("NOTION_TOKEN")
+# NOTION_DB_ID = os.getenv("NOTION_DATABASE_ID")
+# TEST_OFFSET = int(os.getenv("TEST_OFFSET", "0"))
+# TEST_LIMIT = int(os.getenv("TEST_LIMIT", "0"))
+
+# # 다운로드 디렉토리
+# DOWNLOAD_DIR = os.getenv("SMORE_DOWNLOAD_DIR", tempfile.gettempdir())
+# os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# # ─── 클라이언트 초기화 ─────────────────────────────────────────────────────
+# SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+# ga_creds = service_account.Credentials.from_service_account_file(
+#     GOOGLE_CRED, scopes=SCOPES
+# )
+# sheets = build("sheets", "v4", credentials=ga_creds)
+
+# s3 = boto3.client("s3", region_name=AWS_REGION)
+# notion = NotionClient(auth=NOTION_TOKEN)
+
+# SHEET_NAME = SHEET_RANGE.split("!")[0]
+
+# # ─── 헤더 매핑 ─────────────────────────────────────────────────────────────
+# HEADER_TO_PROP = {
+#     "순번": "순번",
+#     "출산을 증명할 수 있는 이미지 파일을 첨부해 주세요 등본, 가족관계증명서, 출생증명서, 산모수첩 중 택1": "증명서 이미지",
+#     "타가몰에서 사용 중이신 아이디를 알려주세요💛 간편가입 하신 경우 앱 아이디를 입력해주세요.(ex.1234567@N)": "타가몰 아이디",
+#     "신청자 본인의 성함을 적어주세요 😃 ※ 표기 오류로 인한 대상 제외 및 경품 미수령시 책임지지 않습니다.": "이름",
+#     "📱 연락 가능한 번호를 적어주세요💛 (예: 010-1234-5678)": "연락처",
+#     "보듬박스를 받으실 상세 주소를 적어 주세요.💛 ※ 표기 오류로 인한 대상 제외 및 경품 미수령시 책임지지 않습니다.": "주소",
+#     "📅 아기 출생 예정일이나 출생일을 알려주세요💛": "출생일",
+#     "담당자": "담당자",
+#     "적/부": "적/부",
+# }
+
+
+# def normalize_header(h: str) -> str:
+#     return re.sub(r"\s+", " ", h.replace("\n", " ").strip())
+
+
+# NORM_HEADER_TO_PROP = {normalize_header(k): v for k, v in HEADER_TO_PROP.items()}
+
+
+# # ─── Excel serial date 변환 ─────────────────────────────────────────────────
+# def excel_serial_to_datetime(serial) -> datetime:
+#     try:
+#         days = float(serial)
+#     except:
+#         return None
+#     epoch = datetime(1899, 12, 30) if days >= 61 else datetime(1899, 12, 31)
+#     return epoch + timedelta(days=days)
+
+
+# # ─── 파일명 안전 생성 ───────────────────────────────────────────────────────
+# def safe_key_name(row_idx: int, filename: str) -> str:
+#     base, ext = os.path.splitext(filename)
+#     b64 = base64.urlsafe_b64encode(base.encode("utf-8")).decode("ascii")
+#     return f"row{row_idx}_{b64}{ext}"
+
+
+# # ─── S3 업로드 ─────────────────────────────────────────────────────────────
+# # def upload_to_s3(local: str, key: str) -> str:
+# # import mimetypes
+
+
+# # ctype, _ = mimetypes.guess_type(local)
+# # s3.upload_file(
+# #     Filename=local,
+# #     Bucket=S3_BUCKET,
+# #     Key=key,
+# #     ExtraArgs={
+# #         "ACL": "public-read",
+# #         "ContentType": ctype or "application/octet-stream",
+# #     },
+# # )
+# # return f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
+# # 이미지인 경우 압축
+# def upload_to_s3(local, key):
+#     # 이미지 압축 및 리사이즈 시도
+#     try:
+#         from PIL import Image
+
+#         img = Image.open(local)
+#         # 최대 가로/세로 1024px로 리사이즈
+#         resample = getattr(Image, "Resampling", Image).LANCZOS
+#         img.thumbnail((1024, 1024), resample)
+#         ext = os.path.splitext(local)[1].lower()
+#         quality = 75  # 수정: 품질 낮춰 용량 줄이기
+#         if ext in (".jpg", ".jpeg"):
+#             img.save(local, format="JPEG", optimize=True, quality=quality)
+#         else:
+#             # PNG 등은 JPEG로 변환
+#             rgb = img.convert("RGB")
+#             jpeg_path = os.path.splitext(local)[0] + ".jpg"
+#             rgb.save(jpeg_path, format="JPEG", optimize=True, quality=quality)
+#             local = jpeg_path
+#     except ImportError:
+#         # PIL 미설치 시 압축 생략
+#         pass
+#     except Exception as e:
+#         print(f"[압축 오류] {local}: {e}")
+#     # S3 업로드
+#     import mimetypes
+
+#     ctype, _ = mimetypes.guess_type(local)
+#     s3.upload_file(
+#         Filename=local,
+#         Bucket=S3_BUCKET,
+#         Key=key,
+#         ExtraArgs={
+#             "ACL": "public-read",
+#             "ContentType": ctype or "application/octet-stream",
+#         },
+#     )
+#     return f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
+
+
+# def get_smore_cookies():
+#     driver_path = chromedriver_autoinstaller.install()
+#     opts = Options()
+#     opts.binary_location = CHROME_BINARY
+
+#     # GitHub Actions 환경용 옵션 추가
+#     opts.add_argument("--headless")
+#     opts.add_argument("--no-sandbox")
+#     opts.add_argument("--disable-dev-shm-usage")
+#     opts.add_argument("--disable-gpu")
+#     opts.add_argument("--remote-debugging-port=9222")
+
+#     # 기존 옵션
+#     if SMORE_USER_DATA:
+#         opts.add_argument(f"--user-data-dir={SMORE_USER_DATA}")
+#     if SMORE_PROFILE:
+#         opts.add_argument(f"--profile-directory={SMORE_PROFILE}")
+
+#     driver = webdriver.Chrome(service=Service(driver_path), options=opts)
+#     try:
+#         driver.get("https://smore.im")
+#         return {c["name"]: c["value"] for c in driver.get_cookies()}
+#     finally:
+#         driver.quit()
+
+
+# def download_smore_image(page_url, cookies, row_idx):
+#     driver_path = chromedriver_autoinstaller.install()
+#     opts = Options()
+#     opts.binary_location = CHROME_BINARY
+#     opts.add_argument(f"--user-data-dir={SMORE_USER_DATA}")
+#     opts.add_argument(f"--profile-directory={SMORE_PROFILE}")
+#     driver = webdriver.Chrome(service=Service(driver_path), options=opts)
+#     try:
+#         driver.get(page_url)
+#         link = WebDriverWait(driver, 15).until(
+#             EC.element_to_be_clickable((By.ID, "download"))
+#         )
+#         file_url = link.get_attribute("href")
+#         sess = requests.Session()
+#         sess.cookies.update(cookies)
+#         resp = sess.get(file_url, stream=True, timeout=30)
+#     finally:
+#         driver.quit()
+
+#     resp.raise_for_status()
+#     if "text/html" in resp.headers.get("Content-Type", ""):
+#         raise RuntimeError("HTML 반환됨(로그인 필요?): " + page_url)
+
+#     cd = resp.headers.get("content-disposition", "")
+#     m = re.search(r"filename\*=UTF-8''([^;]+)", cd) or re.search(
+#         r"filename=?\"?([^\";]+)\"?", cd
+#     )
+#     orig = unquote(m.group(1)) if m else os.path.basename(urlparse(file_url).path)
+#     filename = safe_key_name(row_idx, orig)
+#     local = os.path.join(DOWNLOAD_DIR, filename)
+#     with open(local, "wb") as f:
+#         for chunk in resp.iter_content(1024):
+#             f.write(chunk)
+#     return local
+
+
+# # ─── 메인 ─────────────────────────────────────────────────────────────────
+# def sheet_to_notion_s3():
+#     cookies = get_smore_cookies()
+#     res = (
+#         sheets.spreadsheets()
+#         .values()
+#         .get(
+#             spreadsheetId=SPREADSHEET_ID, range=SHEET_RANGE, valueRenderOption="FORMULA"
+#         )
+#         .execute()
+#     )
+#     rows = res.get("values", [])
+#     if len(rows) < 2:
+#         print("데이터 없음")
+#         return
+
+#     headers = [normalize_header(h) for h in rows[0]]
+#     done_idx = headers.index("이관완료") if "이관완료" in headers else None
+#     data_rows = rows[1:]
+#     recs = data_rows[TEST_OFFSET : TEST_OFFSET + TEST_LIMIT]
+#     db_props = notion.databases.retrieve(database_id=NOTION_DB_ID)["properties"]
+
+#     for i, row in enumerate(recs, start=TEST_OFFSET + 2):
+#         # ─── 여기서 S열 '완료' 체크 ─────────────────────────────
+#         if done_idx is not None and len(row) > done_idx:
+#             cell_val = row[done_idx].strip()
+#             # '완료'로 시작(예: "완료", "완료<")하면 건너뜁니다
+#             if cell_val.startswith("완료"):
+#                 print(f"[Row {i}] 이미 완료된 행, 건너뜁니다")
+#                 continue
+#         data = {headers[j]: row[j] if j < len(row) else "" for j in range(len(headers))}
+#         props, image_urls = {}, []
+
+#         for hdr, val in data.items():
+#             if not val:
+#                 continue
+#             prop = NORM_HEADER_TO_PROP.get(normalize_header(hdr))
+#             if not prop or prop not in db_props:
+#                 continue
+#             ptype = db_props[prop]["type"]
+#             if ptype == "files":
+#                 # m = re.match(r'=HYPERLINK\("([^"\)]+)"', val)
+#                 # url = m.group(1) if m else val
+#                 m = re.match(r'=HYPERLINK\("([^"]+)"(?:\s*,\s*"([^"]+)")?\)', val)
+#                 url = m.group(1)  # 실제 다운로드 URL
+#                 disp = m.group(2) if m and m.group(2) else None  # 옵션 표시명
+#                 try:
+#                     local = download_smore_image(url, cookies, i)
+#                     key = safe_key_name(i, os.path.basename(local))
+#                     s3_url = upload_to_s3(local, key)
+#                     original_name = disp or os.path.basename(local)
+#                     if len(original_name) > 100:
+#                         display_name = original_name[:97] + "..."
+#                     else:
+#                         display_name = original_name
+#                     props[prop] = {
+#                         "files": [
+#                             {
+#                                 # "name": os.path.basename(local),
+#                                 "name": display_name,
+#                                 "external": {"url": s3_url},
+#                             }
+#                         ]
+#                     }
+#                     image_urls.append(s3_url)
+#                 except Exception as e:
+#                     print(f"[Row {i}] 파일 오류: {e}")
+#                 continue
+#             if ptype == "date":
+#                 m2 = re.match(
+#                     r"^=DATE\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", str(val)
+#                 )
+#                 if m2:
+#                     y, mo, da = map(int, m2.groups())
+#                     props[prop] = {"date": {"start": datetime(y, mo, da).isoformat()}}
+#                 else:
+#                     dt = excel_serial_to_datetime(val)
+#                     if dt:
+#                         props[prop] = {"date": {"start": dt.isoformat()}}
+#                 continue
+#             if ptype == "url":
+#                 props[prop] = {"url": val.strip()}
+#                 continue
+#             if ptype == "title":
+#                 props[prop] = {"title": [{"text": {"content": str(val)}}]}
+#                 continue
+#             if ptype == "rich_text":
+#                 props[prop] = {"rich_text": [{"text": {"content": str(val)}}]}
+#                 continue
+
+#         if props:
+#             # print(f"[Row {i}] props=", props)  # debug
+#             page = notion.pages.create(
+#                 parent={"database_id": NOTION_DB_ID}, properties=props
+#             )
+#             print(f"[Row {i}] Notion 등록 완료", list(props.keys()))
+
+#             # 수정: Google Sheets S열에 '완료' 표시
+#             cell = f"{SHEET_NAME}!S{i}"
+#             sheets.spreadsheets().values().update(
+#                 spreadsheetId=SPREADSHEET_ID,
+#                 range=cell,
+#                 valueInputOption="USER_ENTERED",
+#                 body={"values": [["완료"]]},
+#             ).execute()
+#             print(f"[Row {i}] 시트에 ‘완료’ 표기 완료 → {cell}")
+
+#             # ─── 블록 삽입 (오류 나면 건너뛰기) ───────────────────────────────────
+#             for url in image_urls:
+#                 ext = os.path.splitext(urlparse(url).path)[1].lower()
+#                 if ext == ".pdf":
+#                     block = {
+#                         "object": "block",
+#                         "type": "file",
+#                         "file": {"type": "external", "external": {"url": url}},
+#                     }
+#                 else:
+#                     block = {
+#                         "object": "block",
+#                         "type": "image",
+#                         "image": {"type": "external", "external": {"url": url}},
+#                     }
+
+#                 try:
+#                     notion.blocks.children.append(block_id=page["id"], children=[block])
+#                     print(f"[Row {i}] 블록 삽입 완료 → {url}")
+#                 except Exception as e:
+#                     print(f"[Row {i}] 블록 삽입 오류, 건너뜁니다: {url} ▶ {e}")
+
+#         else:
+#             print(f"[Row {i}] 매핑된 속성 없음")
+
+
+# if __name__ == "__main__":
+#     sheet_to_notion_s3()
+
+
 import os
 import re
 import tempfile
 import base64
 import requests
+import json
 from datetime import datetime, timedelta
 import boto3
 import chromedriver_autoinstaller
@@ -93,136 +444,39 @@ def safe_key_name(row_idx: int, filename: str) -> str:
 
 
 # ─── S3 업로드 ─────────────────────────────────────────────────────────────
-# def upload_to_s3(local: str, key: str) -> str:
-# import mimetypes
-
-
-# ctype, _ = mimetypes.guess_type(local)
-# s3.upload_file(
-#     Filename=local,
-#     Bucket=S3_BUCKET,
-#     Key=key,
-#     ExtraArgs={
-#         "ACL": "public-read",
-#         "ContentType": ctype or "application/octet-stream",
-#     },
-# )
-# return f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
-# 이미지인 경우 압축
-# def upload_to_s3(local, key):
-#     # 이미지 압축 및 리사이즈 시도
-#     try:
-#         from PIL import Image
-
-#         img = Image.open(local)
-#         # 최대 가로/세로 1024px로 리사이즈
-#         resample = getattr(Image, "Resampling", Image).LANCZOS
-#         img.thumbnail((1024, 1024), resample)
-#         ext = os.path.splitext(local)[1].lower()
-#         quality = 75  # 수정: 품질 낮춰 용량 줄이기
-#         if ext in (".jpg", ".jpeg"):
-#             img.save(local, format="JPEG", optimize=True, quality=quality)
-#         else:
-#             # PNG 등은 JPEG로 변환
-#             rgb = img.convert("RGB")
-#             jpeg_path = os.path.splitext(local)[0] + ".jpg"
-#             rgb.save(jpeg_path, format="JPEG", optimize=True, quality=quality)
-#             local = jpeg_path
-#     except ImportError:
-#         # PIL 미설치 시 압축 생략
-#         pass
-#     except Exception as e:
-#         print(f"[압축 오류] {local}: {e}")
-#     # S3 업로드
-#     import mimetypes
-
-
-#     ctype, _ = mimetypes.guess_type(local)
-#     s3.upload_file(
-#         Filename=local,
-#         Bucket=S3_BUCKET,
-#         Key=key,
-#         ExtraArgs={
-#             "ACL": "public-read",
-#             "ContentType": ctype or "application/octet-stream",
-#         },
-#     )
-#     return f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
 def upload_to_s3(local, key):
     print(f"[S3 업로드] 시작: {local} -> {key}")
-
-    # 파일 존재 여부 확인
-    if not os.path.exists(local):
-        print(f"[S3 오류] 로컬 파일이 존재하지 않습니다: {local}")
-        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {local}")
-
-    # 파일 크기 확인
-    file_size = os.path.getsize(local)
-    print(f"[S3 업로드] 파일 크기: {file_size} bytes")
-
-    if file_size == 0:
-        print(f"[S3 경고] 파일이 비어있습니다: {local}")
 
     # 이미지 압축 및 리사이즈 시도
     try:
         from PIL import Image
 
-        print(f"[S3 이미지] 압축 시작: {local}")
-
         img = Image.open(local)
-        print(f"[S3 이미지] 원본 크기: {img.size}, 모드: {img.mode}")
-
         # 최대 가로/세로 1024px로 리사이즈
         resample = getattr(Image, "Resampling", Image).LANCZOS
         img.thumbnail((1024, 1024), resample)
-        print(f"[S3 이미지] 리사이즈 후 크기: {img.size}")
-
         ext = os.path.splitext(local)[1].lower()
         quality = 75
-
         if ext in (".jpg", ".jpeg"):
             img.save(local, format="JPEG", optimize=True, quality=quality)
-            print(f"[S3 이미지] JPEG로 저장 완료")
         else:
             # PNG 등은 JPEG로 변환
             rgb = img.convert("RGB")
             jpeg_path = os.path.splitext(local)[0] + ".jpg"
             rgb.save(jpeg_path, format="JPEG", optimize=True, quality=quality)
             local = jpeg_path
-            print(f"[S3 이미지] JPEG로 변환 완료: {jpeg_path}")
-
+            print(f"[S3 업로드] JPEG로 변환: {jpeg_path}")
     except ImportError:
-        print("[S3 경고] PIL 미설치로 압축 생략")
+        print("[S3 업로드] PIL 미설치로 압축 생략")
     except Exception as e:
-        print(f"[S3 경고] 이미지 압축 오류: {e}")
+        print(f"[S3 업로드] 압축 오류: {e}")
 
     # S3 업로드
+    import mimetypes
+
+    ctype, _ = mimetypes.guess_type(local)
+
     try:
-        import mimetypes
-
-        print(f"[S3 업로드] AWS 자격증명 확인...")
-        print(f"[S3 업로드] 버킷: {S3_BUCKET}")
-        print(f"[S3 업로드] 리전: {AWS_REGION}")
-        print(f"[S3 업로드] 키: {key}")
-
-        # 압축 후 파일 크기 재확인
-        final_size = os.path.getsize(local)
-        print(f"[S3 업로드] 최종 파일 크기: {final_size} bytes")
-
-        ctype, _ = mimetypes.guess_type(local)
-        print(f"[S3 업로드] Content-Type: {ctype}")
-
-        # S3 클라이언트 연결 테스트
-        print(f"[S3 업로드] S3 클라이언트 연결 테스트...")
-        try:
-            s3.head_bucket(Bucket=S3_BUCKET)
-            print(f"[S3 업로드] ✅ 버킷 접근 성공")
-        except Exception as e:
-            print(f"[S3 오류] ❌ 버킷 접근 실패: {e}")
-            raise
-
-        # 실제 업로드
-        print(f"[S3 업로드] 파일 업로드 시작...")
         s3.upload_file(
             Filename=local,
             Bucket=S3_BUCKET,
@@ -232,93 +486,242 @@ def upload_to_s3(local, key):
                 "ContentType": ctype or "application/octet-stream",
             },
         )
-
         s3_url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
-        print(f"[S3 업로드] ✅ 업로드 성공: {s3_url}")
-
-        # 업로드 확인
-        try:
-            s3.head_object(Bucket=S3_BUCKET, Key=key)
-            print(f"[S3 업로드] ✅ 업로드 파일 확인 완료")
-        except Exception as e:
-            print(f"[S3 경고] 업로드 파일 확인 실패: {e}")
-
+        print(f"[S3 업로드] ✅ 성공: {s3_url}")
         return s3_url
-
     except Exception as e:
-        print(f"[S3 오류] ❌ S3 업로드 실패: {e}")
-        print(f"[S3 오류] 오류 타입: {type(e)}")
-        import traceback
-
-        print(f"[S3 오류] 상세 트레이스:\n{traceback.format_exc()}")
+        print(f"[S3 업로드] ❌ 실패: {e}")
         raise
 
 
+# ─── 🆕 쿠키 저장/로드 기능 ─────────────────────────────────────────────────
+def use_saved_cookies():
+    """GitHub Secret에 저장된 쿠키 사용"""
+    cookies_json = os.getenv("SMORE_COOKIES")
+
+    if not cookies_json:
+        print("[쿠키] SMORE_COOKIES Secret이 설정되지 않았습니다")
+        return {}
+
+    try:
+        cookies_list = json.loads(cookies_json)
+        cookies_dict = {cookie["name"]: cookie["value"] for cookie in cookies_list}
+        print(f"[쿠키] ✅ 저장된 쿠키 사용: {len(cookies_dict)}개")
+        return cookies_dict
+    except json.JSONDecodeError as e:
+        print(f"[쿠키] ❌ JSON 파싱 오류: {e}")
+        return {}
+
+
+def perform_google_login():
+    """Google 로그인 자동화"""
+    email = os.getenv("GOOGLE_LOGIN_EMAIL")
+    password = os.getenv("GOOGLE_LOGIN_PASSWORD")
+
+    if not email or not password:
+        print("[로그인] Google 로그인 자격증명이 없습니다")
+        return {}
+
+    print(f"[로그인] Google 로그인 시도: {email[:3]}***@{email.split('@')[1]}")
+
+    try:
+        driver_path = chromedriver_autoinstaller.install()
+        opts = Options()
+        opts.binary_location = CHROME_BINARY
+        opts.add_argument("--headless")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-gpu")
+        opts.add_argument("--window-size=1920,1080")
+
+        driver = webdriver.Chrome(service=Service(driver_path), options=opts)
+
+        try:
+            # Google 로그인
+            driver.get("https://accounts.google.com/signin")
+
+            # 이메일 입력
+            email_field = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.ID, "identifierId"))
+            )
+            email_field.send_keys(email)
+            driver.find_element(By.ID, "identifierNext").click()
+
+            # 비밀번호 입력
+            password_field = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.NAME, "password"))
+            )
+            password_field.send_keys(password)
+            driver.find_element(By.ID, "passwordNext").click()
+
+            # 로그인 완료 대기
+            WebDriverWait(driver, 15).until(
+                lambda d: "myaccount.google.com" in d.current_url
+                or "google.com" in d.current_url
+            )
+
+            print("[로그인] ✅ Google 로그인 성공!")
+
+            # Smore 사이트 접속
+            driver.get("https://smore.im")
+            cookies = {c["name"]: c["value"] for c in driver.get_cookies()}
+            print(f"[로그인] Smore 쿠키 획득: {len(cookies)}개")
+
+            return cookies
+
+        finally:
+            driver.quit()
+
+    except Exception as e:
+        print(f"[로그인] ❌ 로그인 실패: {e}")
+        return {}
+
+
+# ─── 🆕 수정된 쿠키 획득 함수 ─────────────────────────────────────────────────
 def get_smore_cookies():
-    driver_path = chromedriver_autoinstaller.install()
-    opts = Options()
-    opts.binary_location = CHROME_BINARY
+    """우선순위: 저장된 쿠키 → 자동 로그인 → 기본 방식"""
+    print("[쿠키] Smore 쿠키 획득 시작...")
 
-    # GitHub Actions 환경용 옵션 추가
-    opts.add_argument("--headless")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--remote-debugging-port=9222")
+    # 1. 저장된 쿠키 먼저 시도
+    saved_cookies = use_saved_cookies()
+    if saved_cookies:
+        return saved_cookies
 
-    # 기존 옵션
-    if SMORE_USER_DATA:
-        opts.add_argument(f"--user-data-dir={SMORE_USER_DATA}")
-    if SMORE_PROFILE:
-        opts.add_argument(f"--profile-directory={SMORE_PROFILE}")
+    # 2. Google 로그인 자동화 시도
+    login_cookies = perform_google_login()
+    if login_cookies:
+        return login_cookies
 
-    driver = webdriver.Chrome(service=Service(driver_path), options=opts)
+    # 3. 기본 방식 (로컬 환경용)
+    print("[쿠키] 기본 방식으로 시도...")
     try:
-        driver.get("https://smore.im")
-        return {c["name"]: c["value"] for c in driver.get_cookies()}
-    finally:
-        driver.quit()
+        driver_path = chromedriver_autoinstaller.install()
+        opts = Options()
+        opts.binary_location = CHROME_BINARY
+        opts.add_argument("--headless")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-gpu")
+
+        # 로컬 환경에서만 사용자 데이터 사용
+        if SMORE_USER_DATA and os.path.exists(SMORE_USER_DATA):
+            opts.add_argument(f"--user-data-dir={SMORE_USER_DATA}")
+            print(f"[쿠키] 로컬 사용자 데이터 사용: {SMORE_USER_DATA}")
+        if SMORE_PROFILE:
+            opts.add_argument(f"--profile-directory={SMORE_PROFILE}")
+            print(f"[쿠키] 프로필 사용: {SMORE_PROFILE}")
+
+        driver = webdriver.Chrome(service=Service(driver_path), options=opts)
+        try:
+            driver.get("https://smore.im")
+            cookies = {c["name"]: c["value"] for c in driver.get_cookies()}
+            print(f"[쿠키] 기본 방식 쿠키: {len(cookies)}개")
+            return cookies
+        finally:
+            driver.quit()
+
+    except Exception as e:
+        print(f"[쿠키] ❌ 모든 방식 실패: {e}")
+        return {}
 
 
+# ─── 🆕 수정된 파일 다운로드 함수 ─────────────────────────────────────────────
 def download_smore_image(page_url, cookies, row_idx):
-    driver_path = chromedriver_autoinstaller.install()
-    opts = Options()
-    opts.binary_location = CHROME_BINARY
-    opts.add_argument(f"--user-data-dir={SMORE_USER_DATA}")
-    opts.add_argument(f"--profile-directory={SMORE_PROFILE}")
-    driver = webdriver.Chrome(service=Service(driver_path), options=opts)
+    print(f"[다운로드] 시작: {page_url}")
+
+    # 직접 다운로드 API 시도 (쿠키 사용)
+    if cookies:
+        try:
+            print("[다운로드] 쿠키로 직접 다운로드 시도...")
+            session = requests.Session()
+            session.cookies.update(cookies)
+
+            response = session.get(page_url, timeout=30)
+            response.raise_for_status()
+
+            content_type = response.headers.get("Content-Type", "")
+            if "image/" in content_type:
+                # 직접 이미지 다운로드 성공
+                filename = f"direct_download_{row_idx}.jpg"
+                local_path = os.path.join(DOWNLOAD_DIR, filename)
+
+                with open(local_path, "wb") as f:
+                    f.write(response.content)
+
+                print(
+                    f"[다운로드] ✅ 직접 다운로드 성공: {len(response.content)} bytes"
+                )
+                return local_path
+
+            elif "text/html" not in content_type:
+                print(f"[다운로드] 알 수 없는 Content-Type: {content_type}")
+
+        except Exception as e:
+            print(f"[다운로드] 직접 다운로드 실패: {e}")
+
+    # Selenium 방식 (기존 방식)
+    print("[다운로드] Selenium 방식으로 재시도...")
     try:
-        driver.get(page_url)
-        link = WebDriverWait(driver, 15).until(
-            EC.element_to_be_clickable((By.ID, "download"))
-        )
-        file_url = link.get_attribute("href")
-        sess = requests.Session()
-        sess.cookies.update(cookies)
-        resp = sess.get(file_url, stream=True, timeout=30)
-    finally:
-        driver.quit()
+        driver_path = chromedriver_autoinstaller.install()
+        opts = Options()
+        opts.binary_location = CHROME_BINARY
+        opts.add_argument("--headless")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-gpu")
 
-    resp.raise_for_status()
-    if "text/html" in resp.headers.get("Content-Type", ""):
-        raise RuntimeError("HTML 반환됨(로그인 필요?): " + page_url)
+        driver = webdriver.Chrome(service=Service(driver_path), options=opts)
 
-    cd = resp.headers.get("content-disposition", "")
-    m = re.search(r"filename\*=UTF-8''([^;]+)", cd) or re.search(
-        r"filename=?\"?([^\";]+)\"?", cd
-    )
-    orig = unquote(m.group(1)) if m else os.path.basename(urlparse(file_url).path)
-    filename = safe_key_name(row_idx, orig)
-    local = os.path.join(DOWNLOAD_DIR, filename)
-    with open(local, "wb") as f:
-        for chunk in resp.iter_content(1024):
-            f.write(chunk)
-    return local
+        try:
+            driver.get(page_url)
+            link = WebDriverWait(driver, 15).until(
+                EC.element_to_be_clickable((By.ID, "download"))
+            )
+            file_url = link.get_attribute("href")
+            print(f"[다운로드] 파일 URL: {file_url}")
+
+            # 쿠키로 파일 다운로드
+            sess = requests.Session()
+            sess.cookies.update(cookies)
+            resp = sess.get(file_url, stream=True, timeout=30)
+            resp.raise_for_status()
+
+            if "text/html" in resp.headers.get("Content-Type", ""):
+                raise RuntimeError(f"HTML 반환됨(로그인 필요?): {page_url}")
+
+            # 파일명 추출
+            cd = resp.headers.get("content-disposition", "")
+            m = re.search(r"filename\*=UTF-8''([^;]+)", cd) or re.search(
+                r"filename=?\"?([^\";]+)\"?", cd
+            )
+            orig = (
+                unquote(m.group(1)) if m else os.path.basename(urlparse(file_url).path)
+            )
+            filename = safe_key_name(row_idx, orig)
+            local = os.path.join(DOWNLOAD_DIR, filename)
+
+            with open(local, "wb") as f:
+                for chunk in resp.iter_content(1024):
+                    f.write(chunk)
+
+            print(f"[다운로드] ✅ Selenium 다운로드 성공: {local}")
+            return local
+
+        finally:
+            driver.quit()
+
+    except Exception as e:
+        print(f"[다운로드] ❌ Selenium 방식도 실패: {e}")
+        raise
 
 
-# ─── 메인 ─────────────────────────────────────────────────────────────────
+# ─── 메인 함수 (기존과 동일) ─────────────────────────────────────────────────
 def sheet_to_notion_s3():
+    print("[메인] Google to Notion 동기화 시작...")
+
     cookies = get_smore_cookies()
+    print(f"[메인] 쿠키 상태: {len(cookies)}개")
+
     res = (
         sheets.spreadsheets()
         .values()
@@ -339,13 +742,13 @@ def sheet_to_notion_s3():
     db_props = notion.databases.retrieve(database_id=NOTION_DB_ID)["properties"]
 
     for i, row in enumerate(recs, start=TEST_OFFSET + 2):
-        # ─── 여기서 S열 '완료' 체크 ─────────────────────────────
+        # 완료 체크
         if done_idx is not None and len(row) > done_idx:
             cell_val = row[done_idx].strip()
-            # '완료'로 시작(예: "완료", "완료<")하면 건너뜁니다
             if cell_val.startswith("완료"):
                 print(f"[Row {i}] 이미 완료된 행, 건너뜁니다")
                 continue
+
         data = {headers[j]: row[j] if j < len(row) else "" for j in range(len(headers))}
         props, image_urls = {}, []
 
@@ -356,34 +759,43 @@ def sheet_to_notion_s3():
             if not prop or prop not in db_props:
                 continue
             ptype = db_props[prop]["type"]
+
             if ptype == "files":
-                # m = re.match(r'=HYPERLINK\("([^"\)]+)"', val)
-                # url = m.group(1) if m else val
+                print(f"[파일] Row {i}: {prop} 처리 시작")
                 m = re.match(r'=HYPERLINK\("([^"]+)"(?:\s*,\s*"([^"]+)")?\)', val)
-                url = m.group(1)  # 실제 다운로드 URL
-                disp = m.group(2) if m and m.group(2) else None  # 옵션 표시명
+                if not m:
+                    print(f"[파일] Row {i}: HYPERLINK 형식 오류: {val}")
+                    continue
+
+                url = m.group(1)
+                disp = m.group(2) if m and m.group(2) else None
+
                 try:
                     local = download_smore_image(url, cookies, i)
                     key = safe_key_name(i, os.path.basename(local))
                     s3_url = upload_to_s3(local, key)
+
                     original_name = disp or os.path.basename(local)
                     if len(original_name) > 100:
                         display_name = original_name[:97] + "..."
                     else:
                         display_name = original_name
+
                     props[prop] = {
                         "files": [
                             {
-                                # "name": os.path.basename(local),
                                 "name": display_name,
                                 "external": {"url": s3_url},
                             }
                         ]
                     }
                     image_urls.append(s3_url)
+                    print(f"[파일] Row {i}: ✅ 성공")
+
                 except Exception as e:
-                    print(f"[Row {i}] 파일 오류: {e}")
+                    print(f"[파일] Row {i}: ❌ 오류: {e}")
                 continue
+
             if ptype == "date":
                 m2 = re.match(
                     r"^=DATE\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", str(val)
@@ -407,13 +819,12 @@ def sheet_to_notion_s3():
                 continue
 
         if props:
-            # print(f"[Row {i}] props=", props)  # debug
             page = notion.pages.create(
                 parent={"database_id": NOTION_DB_ID}, properties=props
             )
             print(f"[Row {i}] Notion 등록 완료", list(props.keys()))
 
-            # 수정: Google Sheets S열에 '완료' 표시
+            # 완료 표시
             cell = f"{SHEET_NAME}!S{i}"
             sheets.spreadsheets().values().update(
                 spreadsheetId=SPREADSHEET_ID,
@@ -421,9 +832,9 @@ def sheet_to_notion_s3():
                 valueInputOption="USER_ENTERED",
                 body={"values": [["완료"]]},
             ).execute()
-            print(f"[Row {i}] 시트에 ‘완료’ 표기 완료 → {cell}")
+            print(f"[Row {i}] 시트에 '완료' 표기 완료 → {cell}")
 
-            # ─── 블록 삽입 (오류 나면 건너뛰기) ───────────────────────────────────
+            # 블록 삽입
             for url in image_urls:
                 ext = os.path.splitext(urlparse(url).path)[1].lower()
                 if ext == ".pdf":
@@ -443,11 +854,13 @@ def sheet_to_notion_s3():
                     notion.blocks.children.append(block_id=page["id"], children=[block])
                     print(f"[Row {i}] 블록 삽입 완료 → {url}")
                 except Exception as e:
-                    print(f"[Row {i}] 블록 삽입 오류, 건너뜁니다: {url} ▶ {e}")
-
+                    print(f"[Row {i}] 블록 삽입 오류: {url} ▶ {e}")
         else:
             print(f"[Row {i}] 매핑된 속성 없음")
+
+    print("[메인] ✅ 동기화 완료!")
 
 
 if __name__ == "__main__":
     sheet_to_notion_s3()
+# $Env:TEST_OFFSET = "1"; $Env:TEST_LIMIT = "10"; python google-to-notion.py
