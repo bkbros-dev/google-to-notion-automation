@@ -109,44 +109,149 @@ def safe_key_name(row_idx: int, filename: str) -> str:
 # )
 # return f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
 # 이미지인 경우 압축
+# def upload_to_s3(local, key):
+#     # 이미지 압축 및 리사이즈 시도
+#     try:
+#         from PIL import Image
+
+#         img = Image.open(local)
+#         # 최대 가로/세로 1024px로 리사이즈
+#         resample = getattr(Image, "Resampling", Image).LANCZOS
+#         img.thumbnail((1024, 1024), resample)
+#         ext = os.path.splitext(local)[1].lower()
+#         quality = 75  # 수정: 품질 낮춰 용량 줄이기
+#         if ext in (".jpg", ".jpeg"):
+#             img.save(local, format="JPEG", optimize=True, quality=quality)
+#         else:
+#             # PNG 등은 JPEG로 변환
+#             rgb = img.convert("RGB")
+#             jpeg_path = os.path.splitext(local)[0] + ".jpg"
+#             rgb.save(jpeg_path, format="JPEG", optimize=True, quality=quality)
+#             local = jpeg_path
+#     except ImportError:
+#         # PIL 미설치 시 압축 생략
+#         pass
+#     except Exception as e:
+#         print(f"[압축 오류] {local}: {e}")
+#     # S3 업로드
+#     import mimetypes
+
+
+#     ctype, _ = mimetypes.guess_type(local)
+#     s3.upload_file(
+#         Filename=local,
+#         Bucket=S3_BUCKET,
+#         Key=key,
+#         ExtraArgs={
+#             "ACL": "public-read",
+#             "ContentType": ctype or "application/octet-stream",
+#         },
+#     )
+#     return f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
 def upload_to_s3(local, key):
+    print(f"[S3 업로드] 시작: {local} -> {key}")
+
+    # 파일 존재 여부 확인
+    if not os.path.exists(local):
+        print(f"[S3 오류] 로컬 파일이 존재하지 않습니다: {local}")
+        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {local}")
+
+    # 파일 크기 확인
+    file_size = os.path.getsize(local)
+    print(f"[S3 업로드] 파일 크기: {file_size} bytes")
+
+    if file_size == 0:
+        print(f"[S3 경고] 파일이 비어있습니다: {local}")
+
     # 이미지 압축 및 리사이즈 시도
     try:
         from PIL import Image
 
+        print(f"[S3 이미지] 압축 시작: {local}")
+
         img = Image.open(local)
+        print(f"[S3 이미지] 원본 크기: {img.size}, 모드: {img.mode}")
+
         # 최대 가로/세로 1024px로 리사이즈
         resample = getattr(Image, "Resampling", Image).LANCZOS
         img.thumbnail((1024, 1024), resample)
+        print(f"[S3 이미지] 리사이즈 후 크기: {img.size}")
+
         ext = os.path.splitext(local)[1].lower()
-        quality = 75  # 수정: 품질 낮춰 용량 줄이기
+        quality = 75
+
         if ext in (".jpg", ".jpeg"):
             img.save(local, format="JPEG", optimize=True, quality=quality)
+            print(f"[S3 이미지] JPEG로 저장 완료")
         else:
             # PNG 등은 JPEG로 변환
             rgb = img.convert("RGB")
             jpeg_path = os.path.splitext(local)[0] + ".jpg"
             rgb.save(jpeg_path, format="JPEG", optimize=True, quality=quality)
             local = jpeg_path
-    except ImportError:
-        # PIL 미설치 시 압축 생략
-        pass
-    except Exception as e:
-        print(f"[압축 오류] {local}: {e}")
-    # S3 업로드
-    import mimetypes
+            print(f"[S3 이미지] JPEG로 변환 완료: {jpeg_path}")
 
-    ctype, _ = mimetypes.guess_type(local)
-    s3.upload_file(
-        Filename=local,
-        Bucket=S3_BUCKET,
-        Key=key,
-        ExtraArgs={
-            "ACL": "public-read",
-            "ContentType": ctype or "application/octet-stream",
-        },
-    )
-    return f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
+    except ImportError:
+        print("[S3 경고] PIL 미설치로 압축 생략")
+    except Exception as e:
+        print(f"[S3 경고] 이미지 압축 오류: {e}")
+
+    # S3 업로드
+    try:
+        import mimetypes
+
+        print(f"[S3 업로드] AWS 자격증명 확인...")
+        print(f"[S3 업로드] 버킷: {S3_BUCKET}")
+        print(f"[S3 업로드] 리전: {AWS_REGION}")
+        print(f"[S3 업로드] 키: {key}")
+
+        # 압축 후 파일 크기 재확인
+        final_size = os.path.getsize(local)
+        print(f"[S3 업로드] 최종 파일 크기: {final_size} bytes")
+
+        ctype, _ = mimetypes.guess_type(local)
+        print(f"[S3 업로드] Content-Type: {ctype}")
+
+        # S3 클라이언트 연결 테스트
+        print(f"[S3 업로드] S3 클라이언트 연결 테스트...")
+        try:
+            s3.head_bucket(Bucket=S3_BUCKET)
+            print(f"[S3 업로드] ✅ 버킷 접근 성공")
+        except Exception as e:
+            print(f"[S3 오류] ❌ 버킷 접근 실패: {e}")
+            raise
+
+        # 실제 업로드
+        print(f"[S3 업로드] 파일 업로드 시작...")
+        s3.upload_file(
+            Filename=local,
+            Bucket=S3_BUCKET,
+            Key=key,
+            ExtraArgs={
+                "ACL": "public-read",
+                "ContentType": ctype or "application/octet-stream",
+            },
+        )
+
+        s3_url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
+        print(f"[S3 업로드] ✅ 업로드 성공: {s3_url}")
+
+        # 업로드 확인
+        try:
+            s3.head_object(Bucket=S3_BUCKET, Key=key)
+            print(f"[S3 업로드] ✅ 업로드 파일 확인 완료")
+        except Exception as e:
+            print(f"[S3 경고] 업로드 파일 확인 실패: {e}")
+
+        return s3_url
+
+    except Exception as e:
+        print(f"[S3 오류] ❌ S3 업로드 실패: {e}")
+        print(f"[S3 오류] 오류 타입: {type(e)}")
+        import traceback
+
+        print(f"[S3 오류] 상세 트레이스:\n{traceback.format_exc()}")
+        raise
 
 
 def get_smore_cookies():

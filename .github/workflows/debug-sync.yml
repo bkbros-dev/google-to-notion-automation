@@ -115,6 +115,74 @@ jobs:
           fi
 
           echo "🔍🔍🔍 Google 인증 파일 준비 완료 🔍🔍🔍"
+      # 🆕 여기에 새로운 S3 디버깅 단계 추가!
+      - name: 🔍 Step 6.5 - AWS S3 디버깅
+        run: |
+          echo "🔍🔍🔍 AWS S3 디버깅 시작 🔍🔍🔍"
+
+          echo "=== AWS 자격증명 확인 ==="
+          echo "AWS_ACCESS_KEY_ID 길이: ${#AWS_ACCESS_KEY_ID}"
+          echo "AWS_SECRET_ACCESS_KEY 길이: ${#AWS_SECRET_ACCESS_KEY}"
+          echo "AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-'❌ 설정되지 않음'}"
+          echo "S3_BUCKET_NAME: ${S3_BUCKET_NAME:-'❌ 설정되지 않음'}"
+
+          if [ -z "$AWS_ACCESS_KEY_ID" ]; then
+            echo "❌ AWS_ACCESS_KEY_ID가 설정되지 않았습니다!"
+            exit 1
+          fi
+
+          if [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "❌ AWS_SECRET_ACCESS_KEY가 설정되지 않았습니다!"
+            exit 1
+          fi
+
+          if [ -z "$S3_BUCKET_NAME" ]; then
+            echo "❌ S3_BUCKET_NAME이 설정되지 않았습니다!"
+            exit 1
+          fi
+
+          echo "✅ AWS 자격증명이 모두 설정되었습니다"
+
+          echo "=== S3 연결 테스트 ==="
+
+          # AWS CLI 설치
+          echo "AWS CLI 설치 중..."
+          pip install awscli
+
+          # S3 버킷 접근 테스트
+          echo "S3 버킷 목록 확인 중..."
+          if aws s3 ls s3://$S3_BUCKET_NAME/ 2>/dev/null; then
+            echo "✅ S3 버킷 접근 성공!"
+          else
+            echo "❌ S3 버킷에 접근할 수 없습니다!"
+            echo "버킷 이름: $S3_BUCKET_NAME"
+            echo "리전: $AWS_DEFAULT_REGION"
+            echo "AWS CLI 설정 확인 중..."
+            aws configure list
+            exit 1
+          fi
+
+          # 테스트 파일 업로드
+          echo "테스트 파일 업로드 중..."
+          echo "Hello from GitHub Actions $(date)" > /tmp/test.txt
+          if aws s3 cp /tmp/test.txt s3://$S3_BUCKET_NAME/test/github-actions-test.txt 2>/dev/null; then
+            echo "✅ S3 파일 업로드 테스트 성공!"
+
+            # 테스트 파일 삭제
+            aws s3 rm s3://$S3_BUCKET_NAME/test/github-actions-test.txt 2>/dev/null
+            echo "✅ 테스트 파일 정리 완료"
+          else
+            echo "❌ S3 파일 업로드 실패!"
+            echo "권한을 확인해주세요."
+            exit 1
+          fi
+
+          echo "🔍🔍🔍 AWS S3 디버깅 완료 🔍🔍🔍"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
 
       - name: 🚀 Step 7 - 스크립트 실행
         env:
